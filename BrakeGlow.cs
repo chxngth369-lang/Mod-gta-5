@@ -1,14 +1,13 @@
 using System;
+using System.IO;
 using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// BrakeGlow v2: hard braking heats each wheel's brake; hot brakes glow red-orange.
-// Debug = true shows a "loaded" message and live heat on screen, to find out why nothing glows.
+// BrakeGlow v3: same brake-heat glow, but writes BrakeGlow.log next to the dll
+// (so we can see if the script runs and what it sees) and uses natives for wheel bones.
 public class BrakeGlow : Script
 {
-    const bool Debug = true;
-
     static readonly string[] WheelBones = { "wheel_lf", "wheel_rf", "wheel_lr", "wheel_rr" };
     static readonly float[] BrakeShare = { 1.3f, 1.3f, 0.7f, 0.7f };
 
@@ -22,10 +21,31 @@ public class BrakeGlow : Script
     readonly float[] heat = new float[4];
     float lastSpeed;
     int lastHandle;
-    bool shownLoaded;
+    bool firstTick;
+    int nextLog;
+    int lightsDrawn;
+    static string logPath;
+
+    static void Log(string msg)
+    {
+        try
+        {
+            if (logPath == null)
+            {
+                string dir = null;
+                try { dir = Path.GetDirectoryName(typeof(BrakeGlow).Assembly.Location); } catch { }
+                if (string.IsNullOrEmpty(dir))
+                    dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                logPath = Path.Combine(dir, "BrakeGlow.log");
+            }
+            File.AppendAllText(logPath, DateTime.Now.ToString("HH:mm:ss.fff") + " " + msg + "\n");
+        }
+        catch { }
+    }
 
     public BrakeGlow()
     {
+        Log("constructor ran");
         Tick += OnTick;
     }
 
@@ -38,9 +58,22 @@ public class BrakeGlow : Script
 
     void OnTick(object sender, EventArgs e)
     {
-        if (Debug && !shownLoaded)
+        try
         {
-            shownLoaded = true;
+            Run();
+        }
+        catch (Exception ex)
+        {
+            Log("ERROR in tick: " + ex);
+        }
+    }
+
+    void Run()
+    {
+        if (!firstTick)
+        {
+            firstTick = true;
+            Log("first tick, logging to " + logPath);
             GTA.UI.Screen.ShowSubtitle("BrakeGlow loaded", 4000);
         }
 
@@ -49,7 +82,7 @@ public class BrakeGlow : Script
 
         if (veh == null || !veh.Exists() || player.SeatIndex != VehicleSeat.Driver)
         {
-            if (lastHandle != 0) Reset();
+            if (lastHandle != 0) { Log("left vehicle"); Reset(); }
             return;
         }
 
@@ -58,6 +91,7 @@ public class BrakeGlow : Script
             Reset();
             lastHandle = veh.Handle;
             lastSpeed = veh.Speed;
+            Log("entered vehicle " + veh.Handle);
         }
 
         float dt = Game.LastFrameTime;
@@ -86,11 +120,17 @@ public class BrakeGlow : Script
             if (heat[i] > GlowStart) anyGlow = true;
         }
 
-        if (Debug)
+        GTA.UI.Screen.ShowSubtitle(
+            "heat " + heat[0].ToString("0.00") + " | speed " + speed.ToString("0")
+            + " | decel " + decel.ToString("0.0") + " | brake " + braking, 200);
+
+        int now = Game.GameTime;
+        if (now >= nextLog)
         {
-            GTA.UI.Screen.ShowSubtitle(
-                "heat " + heat[0].ToString("0.00") + " | speed " + speed.ToString("0")
-                + " | decel " + decel.ToString("0.0") + " | brake " + braking, 200);
+            nextLog = now + 500;
+            Log("speed " + speed.ToString("0.0") + " decel " + decel.ToString("0.0")
+                + " braking " + braking + " heat " + heat[0].ToString("0.00") + "/" + heat[2].ToString("0.00")
+                + " lights " + lightsDrawn);
         }
 
         if (!anyGlow) return;
@@ -99,8 +139,14 @@ public class BrakeGlow : Script
         {
             if (heat[i] <= GlowStart) continue;
 
-            EntityBone bone = veh.Bones[WheelBones[i]];
-            if (!bone.IsValid) continue;
+            int boneIndex = Function.Call<int>(Hash.GET_ENTITY_BONE_INDEX_BY_NAME, veh.Handle, WheelBones[i]);
+            if (boneIndex < 0)
+            {
+                if (nextLog - now > 400) Log("bone not found: " + WheelBones[i]);
+                continue;
+            }
+
+            Vector3 pos = Function.Call<Vector3>(Hash.GET_WORLD_POSITION_OF_ENTITY_BONE, veh.Handle, boneIndex);
 
             float glow = (heat[i] - GlowStart) / (1f - GlowStart);
             int r = 255;
@@ -109,9 +155,9 @@ public class BrakeGlow : Script
             float range = 1.5f + 2.5f * glow;
             float intensity = 6f + 14f * glow;
 
-            Vector3 pos = bone.Position;
             Function.Call(Hash.DRAW_LIGHT_WITH_RANGE,
                 pos.X, pos.Y, pos.Z, r, g, b, range, intensity);
+            lightsDrawn++;
         }
     }
 }
