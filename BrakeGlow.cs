@@ -3,25 +3,26 @@ using GTA;
 using GTA.Math;
 using GTA.Native;
 
-// BrakeGlow: hard braking heats each wheel's brake; hot brakes glow red-orange.
-// Heat is simulated per wheel (front brakes take more load), then cools with time and speed.
-// The glow is a small point light at each wheel hub (not an emissive brake disc).
+// BrakeGlow v2: hard braking heats each wheel's brake; hot brakes glow red-orange.
+// Debug = true shows a "loaded" message and live heat on screen, to find out why nothing glows.
 public class BrakeGlow : Script
 {
-    static readonly string[] WheelBones = { "wheel_lf", "wheel_rf", "wheel_lr", "wheel_rr" };
-    static readonly float[] BrakeShare = { 1.3f, 1.3f, 0.7f, 0.7f }; // front 65%, rear 35%
+    const bool Debug = true;
 
-    // Tuning
-    const float HeatGain = 0.0008f;     // heat per (deceleration * speed) per second
-    const float BaseCooling = 0.12f;    // cooling per second when parked
-    const float AirCooling = 0.012f;    // extra cooling per second per m/s of speed
-    const float GlowStart = 0.25f;      // heat below this: no glow
-    const float MinSpeed = 2.0f;        // m/s, below this braking adds no heat
-    const float MaxDecel = 25.0f;       // m/s^2, ignores crash spikes above this
+    static readonly string[] WheelBones = { "wheel_lf", "wheel_rf", "wheel_lr", "wheel_rr" };
+    static readonly float[] BrakeShare = { 1.3f, 1.3f, 0.7f, 0.7f };
+
+    const float HeatGain = 0.002f;
+    const float BaseCooling = 0.12f;
+    const float AirCooling = 0.012f;
+    const float GlowStart = 0.10f;
+    const float MinSpeed = 2.0f;
+    const float MaxDecel = 25.0f;
 
     readonly float[] heat = new float[4];
     float lastSpeed;
     int lastHandle;
+    bool shownLoaded;
 
     public BrakeGlow()
     {
@@ -37,6 +38,12 @@ public class BrakeGlow : Script
 
     void OnTick(object sender, EventArgs e)
     {
+        if (Debug && !shownLoaded)
+        {
+            shownLoaded = true;
+            GTA.UI.Screen.ShowSubtitle("BrakeGlow loaded", 4000);
+        }
+
         Ped player = Game.Player.Character;
         Vehicle veh = player.CurrentVehicle;
 
@@ -79,6 +86,13 @@ public class BrakeGlow : Script
             if (heat[i] > GlowStart) anyGlow = true;
         }
 
+        if (Debug)
+        {
+            GTA.UI.Screen.ShowSubtitle(
+                "heat " + heat[0].ToString("0.00") + " | speed " + speed.ToString("0")
+                + " | decel " + decel.ToString("0.0") + " | brake " + braking, 200);
+        }
+
         if (!anyGlow) return;
 
         for (int i = 0; i < heat.Length; i++)
@@ -88,12 +102,12 @@ public class BrakeGlow : Script
             EntityBone bone = veh.Bones[WheelBones[i]];
             if (!bone.IsValid) continue;
 
-            float glow = (heat[i] - GlowStart) / (1f - GlowStart); // 0..1
+            float glow = (heat[i] - GlowStart) / (1f - GlowStart);
             int r = 255;
             int g = (int)(40f + 110f * glow);
             int b = (int)(10f + 20f * glow);
-            float range = 0.5f + 1.0f * glow;
-            float intensity = 2f + 6f * glow;
+            float range = 1.5f + 2.5f * glow;
+            float intensity = 6f + 14f * glow;
 
             Vector3 pos = bone.Position;
             Function.Call(Hash.DRAW_LIGHT_WITH_RANGE,
